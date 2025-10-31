@@ -1,0 +1,43 @@
+name: Keep Render App Awake (every 15m)
+
+on:
+  schedule:
+    - cron: "*/15 * * * *" # 每 15 分鐘（UTC）
+  workflow_dispatch: {} # 可手動觸發
+
+concurrency:
+  group: ping-render # 避免重疊執行
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render app
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          URL="https://cleo.onrender.com/"
+          TS="$(date +%s)"
+          # 為了穩定：帶上 random jitter，降低同一時間撞車的機率
+          sleep $(( RANDOM % 5 ))
+
+          echo "Pinging: ${URL}?t=${TS}"
+          # 用 GET 觸發（比 HEAD 更保險喚醒），最多等 20 秒、最多重試 2 次
+          # -L 跟隨轉址；-s 安靜模式；-S 顯示錯誤；-f 非 2xx/3xx 視為失敗
+          http_code=$(curl -LsfS --max-time 20 -o /dev/null -w "%{http_code}" "${URL}?t=${TS}" || echo "000")
+          echo "HTTP ${http_code}"
+
+          # 非 2xx/3xx 時讓 job 失敗（方便你在 Actions 看到異常）
+          if [[ ! "$http_code" =~ ^2|3 ]]; then
+            echo "Ping failed (HTTP ${http_code})."
+            exit 1
+          fi
+
+      - name: Optional HEAD (quick warm confirm)
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          URL="https://cleo.onrender.com/"
+          curl -Is --max-time 10 "${URL}?t=$(date +%s)" | head -n 1 || true
