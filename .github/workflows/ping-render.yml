@@ -20,18 +20,50 @@ jobs:
 
           URL="https://cleo.onrender.com/"
           TS="$(date +%s)"
+
           # 為了穩定：帶上 random jitter，降低同一時間撞車的機率
           sleep $(( RANDOM % 5 ))
 
           echo "Pinging: ${URL}?t=${TS}"
-          # 用 GET 觸發（比 HEAD 更保險喚醒），最多等 20 秒、最多重試 2 次
-          # -L 跟隨轉址；-s 安靜模式；-S 顯示錯誤；-f 非 2xx/3xx 視為失敗
-          http_code=$(curl -LsfS --max-time 20 -o /dev/null -w "%{http_code}" "${URL}?t=${TS}" || echo "000")
-          echo "HTTP ${http_code}"
 
-          # 非 2xx/3xx 時讓 job 失敗（方便你在 Actions 看到異常）
-          if [[ ! "$http_code" =~ ^2|3 ]]; then
-            echo "Ping failed (HTTP ${http_code})."
+          # 增加重試機制，因為 Render 免費服務可能需要冷啟動
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          SUCCESS=false
+
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$SUCCESS" = false ]; do
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "Attempt ${RETRY_COUNT}/${MAX_RETRIES}..."
+            
+            # 第一次嘗試用較長的超時時間（60秒），後續嘗試用 30 秒
+            if [ $RETRY_COUNT -eq 1 ]; then
+              TIMEOUT=60
+            else
+              TIMEOUT=30
+            fi
+            
+            # -L 跟隨轉址；-s 安靜模式；-S 顯示錯誤；-f 非 2xx/3xx 視為失敗
+            http_code=$(curl -LsfS --max-time $TIMEOUT --connect-timeout 30 -o /dev/null -w "%{http_code}" "${URL}?t=${TS}&retry=${RETRY_COUNT}" || echo "000")
+            echo "HTTP ${http_code} (timeout: ${TIMEOUT}s)"
+            
+            if [[ "$http_code" =~ ^2|3 ]]; then
+              echo "✅ Ping successful!"
+              SUCCESS=true
+            else
+              echo "❌ Ping failed (HTTP ${http_code})"
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "Waiting 10 seconds before retry..."
+                sleep 10
+              fi
+            fi
+          done
+
+          # 如果所有重試都失敗，讓 job 失敗
+          if [ "$SUCCESS" = false ]; then
+            echo "🚨 All ${MAX_RETRIES} attempts failed. This might indicate:"
+            echo "   - Render service is experiencing issues"
+            echo "   - Service is taking longer than usual to cold start"
+            echo "   - Network connectivity problems"
             exit 1
           fi
 
