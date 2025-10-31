@@ -2,7 +2,7 @@ name: Wake HuggingFace n8n Space
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # 每天 00:00 UTC；台北時間 08:00
+    - cron: "0 0 * * *" # 每天 00:00 UTC；台北時間 08:00
   workflow_dispatch: {}
 
 defaults:
