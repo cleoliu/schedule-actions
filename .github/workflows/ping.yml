@@ -5,17 +5,15 @@ on:
     - cron: "0 0 * * *" # 每天 00:00 UTC；台北時間 08:00
   workflow_dispatch: {}
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
   wake:
     runs-on: ubuntu-latest
     steps:
       - name: Wake & verify n8n on HuggingFace
+        shell: bash
         run: |
-          bash -Eeuo pipefail <<'SCRIPT'
+          set -Eeuo pipefail
+
           SPACE_URL="https://cleoliu-tw-n8n.hf.space"
           HEALTH_PATH="/healthz"
           MAX_WAIT_SECONDS=300
@@ -45,8 +43,18 @@ jobs:
           check_home() {
             local body
             body=$(curl -fsSL "${SPACE_URL}/?t=$(date +%s)" || true)
-            # 若還在睡/喚醒中，HF 會顯示提示頁
+            # HF 睡眠/喚醒頁的特徵字樣
             if echo "$body" | grep -qiE "sleep|waking|starting|This Space is sleeping"; then
               return 1
             fi
-            #
+            # n8n 頁面常含 "n8n"；沒看到也可能是自訂頁，但只要不是睡眠頁就當 OK
+            if echo "$body" | grep -qi "n8n"; then
+              return 0
+            fi
+            return 0
+          }
+
+          while true; do
+            now=$(date +%s)
+            if (( now >= deadline )); then
+              ech
