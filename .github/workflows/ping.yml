@@ -2,35 +2,39 @@ name: Wake HuggingFace n8n Space
 
 on:
   schedule:
-    - cron: "0 0 * * *"   # 每天 00:00 UTC 執行；台北時間為上午 8:00
+    - cron: "0 0 * * *"   # 每天 00:00 UTC；台北時間 08:00
   workflow_dispatch: {}
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   wake:
     runs-on: ubuntu-latest
-    env:
-      SPACE_URL: "https://cleoliu-tw-n8n.hf.space"
-      HEALTH_PATH: "/healthz"
-      MAX_WAIT_SECONDS: "300"
-      POLL_INTERVAL_SECONDS: "10"
     steps:
-      - name: Warm up (kick cold start)
+      - name: Wake & verify n8n on HuggingFace
         run: |
-          set -eux
+          bash -Eeuo pipefail <<'SCRIPT'
+          SPACE_URL="https://cleoliu-tw-n8n.hf.space"
+          HEALTH_PATH="/healthz"
+          MAX_WAIT_SECONDS=300
+          POLL_INTERVAL_SECONDS=10
+
+          # 先用 GET 觸發冷啟動（避免快取）
           curl -fsSL "${SPACE_URL}/?t=$(date +%s)" >/dev/null || true
 
-      - name: Wait until Space is live
-        run: |
-          set -euo pipefail
           start_ts=$(date +%s)
           deadline=$(( start_ts + MAX_WAIT_SECONDS ))
 
           check_health() {
+            local status
             status=$(curl -s -o /dev/null -w "%{http_code}" "${SPACE_URL}${HEALTH_PATH}?t=$(date +%s)" || true)
-            if [ "$status" = "200" ]; then
+            if [[ "$status" == "200" ]]; then
               echo "healthz OK (200)"
               return 0
-            elif [ "$status" = "401" ] || [ "$status" = "404" ]; then
+            elif [[ "$status" == "401" || "$status" == "404" ]]; then
+              echo "healthz not accessible (status $status) → fallback to homepage"
               return 2
             else
               echo "healthz status: $status"
@@ -39,6 +43,10 @@ jobs:
           }
 
           check_home() {
+            local body
             body=$(curl -fsSL "${SPACE_URL}/?t=$(date +%s)" || true)
-            echo "$body" | grep -qiE "sleep|waking|starting|This Space is sleeping" && return 1
-            echo "$body" | grep -qi "n8n" && return 0
+            # 若還在睡/喚醒中，HF 會顯示提示頁
+            if echo "$body" | grep -qiE "sleep|waking|starting|This Space is sleeping"; then
+              return 1
+            fi
+            #
