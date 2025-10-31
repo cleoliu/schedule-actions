@@ -1,4 +1,4 @@
-name: Wake HuggingFace n8n Space
+name: Keep HuggingFace n8n Awake (daily 08:00 TPE)
 
 on:
   schedule:
