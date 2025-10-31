@@ -162,17 +162,17 @@ jobs:
           }
 
           REPORT_MD="$(cat <<EOF
-# Uptime Weekly Report
-**區間（UTC）**：\`${START_UTC}\` → \`${NOW_UTC}\`
+            # Uptime Weekly Report
+            **區間（UTC）**：\\\`\${START_UTC}\\\` → \\\`\${NOW_UTC}\\\`
 
-> 時區說明：GitHub Actions 使用 **UTC**。上方時間換算台北時間需 +8 小時。
+            > 時區說明：GitHub Actions 使用 **UTC**。上方時間換算台北時間需 +8 小時。
 
-$(make_section "Hugging Face Wake Workflow" "$HF_JSON")
-$(make_section "Render Keep-awake Workflow" "$RENDER_JSON")
+            \$(make_section "Hugging Face Wake Workflow" "\$HF_JSON")
+            \$(make_section "Render Keep-awake Workflow" "\$RENDER_JSON")
 
-— 自動產生於 \`${NOW_UTC}\`
-EOF
-)"
+            — 自動產生於 \\\`\${NOW_UTC}\\\`
+            EOF
+            )"
           echo "---- Report Markdown ----"
           echo "$REPORT_MD"
 
