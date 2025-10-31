@@ -1,0 +1,44 @@
+name: Wake HuggingFace n8n Space
+
+on:
+  schedule:
+    - cron: "0 0 * * *"   # 每天 00:00 UTC 執行；台北時間為上午 8:00
+  workflow_dispatch: {}
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    env:
+      SPACE_URL: "https://cleoliu-tw-n8n.hf.space"
+      HEALTH_PATH: "/healthz"
+      MAX_WAIT_SECONDS: "300"
+      POLL_INTERVAL_SECONDS: "10"
+    steps:
+      - name: Warm up (kick cold start)
+        run: |
+          set -eux
+          curl -fsSL "${SPACE_URL}/?t=$(date +%s)" >/dev/null || true
+
+      - name: Wait until Space is live
+        run: |
+          set -euo pipefail
+          start_ts=$(date +%s)
+          deadline=$(( start_ts + MAX_WAIT_SECONDS ))
+
+          check_health() {
+            status=$(curl -s -o /dev/null -w "%{http_code}" "${SPACE_URL}${HEALTH_PATH}?t=$(date +%s)" || true)
+            if [ "$status" = "200" ]; then
+              echo "healthz OK (200)"
+              return 0
+            elif [ "$status" = "401" ] || [ "$status" = "404" ]; then
+              return 2
+            else
+              echo "healthz status: $status"
+              return 1
+            fi
+          }
+
+          check_home() {
+            body=$(curl -fsSL "${SPACE_URL}/?t=$(date +%s)" || true)
+            echo "$body" | grep -qiE "sleep|waking|starting|This Space is sleeping" && return 1
+            echo "$body" | grep -qi "n8n" && return 0
