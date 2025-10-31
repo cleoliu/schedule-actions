@@ -2,7 +2,7 @@ name: 【Render】every 15m
 
 on:
   schedule:
-    - cron: "*/15 * * * *" # 每 15 分鐘（UTC）
+    - cron: "*/5 * * * *" # 每 15 分鐘（UTC）
   workflow_dispatch: {} # 可手動觸發
 
 concurrency:
