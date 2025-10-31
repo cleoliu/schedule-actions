@@ -1,0 +1,185 @@
+name: Uptime Weekly Report
+
+on:
+  schedule:
+    # 每週一 01:00 UTC 執行（台北時間週一 09:00）
+    - cron: "0 1 * * MON"
+  workflow_dispatch: {}
+
+permissions:
+  actions: read
+  issues: write
+  contents: read
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Generate weekly report for HF + Render
+        shell: bash
+        env:
+          HF_WORKFLOW_FILE: "ping-n8n.yml"
+          RENDER_WORKFLOW_FILE: "ping-render.yml"
+          # === 可調整：要列出最近幾筆失敗 ===
+          MAX_FAILURES_TO_LIST: "10"
+        run: |
+          set -Eeuo pipefail
+
+          if ! command -v gh >/dev/null; then
+            echo "GitHub CLI (gh) is required on runner"; exit 1
+          fi
+
+          REPO="${GITHUB_REPOSITORY}"
+          NOW_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          START_UTC="$(date -u -d '7 days ago' +%Y-%m-%dT%H:%M:%SZ)"
+
+          echo "Repo: $REPO"
+          echo "Range: $START_UTC → $NOW_UTC"
+
+          get_stats () {
+            local workflow_file="$1"
+            # 取 200 筆以增加覆蓋（15 分鐘頻率大約一週 ~ 672 次；此處兩頁可再加 per_page=100&page=2）
+            local runs_json page=1 all="[]"
+            while :; do
+              runs_json="$(gh api -X GET \
+                "/repos/${REPO}/actions/workflows/${workflow_file}/runs" \
+                -f per_page=100 -f page=$page \
+                -q '.workflow_runs')"
+              # 無資料就跳出
+              if [[ "$(jq 'length' <<<"$runs_json")" -eq 0 ]]; then
+                break
+              fi
+              # 合併
+              all="$(jq -c --argjson new "$runs_json" '. + $new' <<<"$all")"
+              # 若不到 100 筆也跳出
+              if [[ "$(jq 'length' <<<"$runs_json")" -lt 100 ]]; then
+                break
+              fi
+              page=$((page+1))
+            done
+
+            # 過濾近 7 天
+            local filtered
+            filtered="$(jq -c --arg start "$START_UTC" '[ .[] | select(.created_at >= $start) ]' <<<"$all")"
+
+            # 統計
+            local total success cancelled failure timed_out neutral skipped
+            total="$(jq 'length' <<<"$filtered")"
+            success="$(jq '[.[] | select(.conclusion=="success")] | length' <<<"$filtered")"
+            cancelled="$(jq '[.[] | select(.conclusion=="cancelled")] | length' <<<"$filtered")"
+            timed_out="$(jq '[.[] | select(.conclusion=="timed_out")] | length' <<<"$filtered")"
+            failure="$(jq '[.[] | select(.conclusion=="failure")] | length' <<<"$filtered")"
+            neutral="$(jq '[.[] | select(.conclusion=="neutral")] | length' <<<"$filtered")"
+            skipped="$(jq '[.[] | select(.conclusion=="skipped")] | length' <<<"$filtered")"
+
+            # 最近失敗清單（含 failure / timed_out）
+            local failures
+            failures="$(jq -c \
+              --argjson n ${MAX_FAILURES_TO_LIST} \
+              '[ .[] | select((.conclusion=="failure") or (.conclusion=="timed_out")) 
+                 | {name: .name, status: .status, conclusion: .conclusion, run_started_at: .run_started_at, html_url: .html_url} ] 
+               | sort_by(.run_started_at) | reverse | .[:$n]' \
+              <<<"$filtered")"
+
+            # 成功率
+            local ok=$((success))
+            local denom=$(( total > 0 ? total : 1 ))
+            # 用 awk 做兩位小數
+            local rate
+            rate="$(awk -v s="$ok" -v d="$denom" 'BEGIN { printf("%.2f", (s/d)*100) }')"
+
+            jq -n --arg file "$workflow_file" \
+                  --arg total "$total" \
+                  --arg success "$success" \
+                  --arg cancelled "$cancelled" \
+                  --arg failure "$failure" \
+                  --arg timed_out "$timed_out" \
+                  --arg neutral "$neutral" \
+                  --arg skipped "$skipped" \
+                  --arg rate "$rate" \
+                  --argjson failures "$failures" \
+              '{
+                file: $file,
+                total: ($total|tonumber),
+                success: ($success|tonumber),
+                cancelled: ($cancelled|tonumber),
+                failure: ($failure|tonumber),
+                timed_out: ($timed_out|tonumber),
+                neutral: ($neutral|tonumber),
+                skipped: ($skipped|tonumber),
+                success_rate_pct: ($rate|tonumber),
+                failures: $failures
+              }'
+          }
+
+          HF_JSON="$(get_stats "$HF_WORKFLOW_FILE")"
+          RENDER_JSON="$(get_stats "$RENDER_WORKFLOW_FILE")"
+
+          echo "HF stats: $HF_JSON"
+          echo "Render stats: $RENDER_JSON"
+
+          # 產出 Markdown 報告
+          START_DATE="$(date -u -d "$START_UTC" +%Y-%m-%d)"
+          END_DATE="$(date -u -d "$NOW_UTC" +%Y-%m-%d)"
+          TITLE="Uptime Weekly Report (${START_DATE} → ${END_DATE})"
+
+          make_section () {
+            local name="$1" json="$2"
+            local file total success cancelled failure timed_out neutral skipped rate
+            file="$(jq -r '.file' <<<"$json")"
+            total="$(jq -r '.total' <<<"$json")"
+            success="$(jq -r '.success' <<<"$json")"
+            cancelled="$(jq -r '.cancelled' <<<"$json")"
+            failure="$(jq -r '.failure' <<<"$json")"
+            timed_out="$(jq -r '.timed_out' <<<"$json")"
+            neutral="$(jq -r '.neutral' <<<"$json")"
+            skipped="$(jq -r '.skipped' <<<"$json")"
+            rate="$(jq -r '.success_rate_pct' <<<"$json")"
+
+            echo "### ${name} \`(${file})\`"
+            echo ""
+            echo "| 指標 | 數值 |"
+            echo "|------|------|"
+            echo "| 總執行次數 | ${total} |"
+            echo "| 成功次數 | ${success} |"
+            echo "| 失敗次數 | ${failure} |"
+            echo "| 逾時次數 | ${timed_out} |"
+            echo "| 取消次數 | ${cancelled} |"
+            echo "| 跳過次數 | ${skipped} |"
+            echo "| 成功率 | ${rate}% |"
+            echo ""
+            echo "<details><summary>最近失敗（含逾時）</summary>"
+            echo ""
+            if [[ "$(jq 'length' <<<"$(jq '.failures' <<<"$json")")" -eq 0 ]]; then
+              echo "無"
+            else
+              jq -r '.failures[] | "- \(.run_started_at) — [\(.conclusion)](\(.html_url))"' <<<"$json"
+            fi
+            echo ""
+            echo "</details>"
+            echo ""
+          }
+
+          REPORT_MD="$(cat <<EOF
+            # Uptime Weekly Report
+            **區間（UTC）**：\`${START_UTC}\` → \`${NOW_UTC}\`
+
+            > 時區說明：GitHub Actions 使用 **UTC**。上方時間換算台北時間需 +8 小時。
+
+            $(make_section "Hugging Face Wake Workflow" "$HF_JSON")
+            $(make_section "Render Keep-awake Workflow" "$RENDER_JSON")
+
+            — 自動產生於 \`${NOW_UTC}\`
+            EOF
+            )"
+          echo "---- Report Markdown ----"
+          echo "$REPORT_MD"
+
+          # 建立一則新的 Issue（每週一則，方便留存）
+          ISSUE_URL="$(gh issue create \
+            --title "$TITLE" \
+            --body "$REPORT_MD" \
+            --label "report,uptime" \
+            --repo "$REPO")"
+
+          echo "Created issue: $ISSUE_URL"
