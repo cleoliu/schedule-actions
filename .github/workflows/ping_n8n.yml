@@ -1,4 +1,4 @@
-name: Keep HuggingFace n8n Awake (daily 08:00 TPE)
+name: 【HuggingFace_n8n】daily 08:00 TPE
 
 on:
   schedule:

@@ -1,4 +1,4 @@
-name: Keep Render App Awake (every 15m)
+name: 【Render】every 15m
 
 on:
   schedule:
